@@ -1,0 +1,42 @@
+`ifndef BASE_TEST_SV
+`define BASE_TEST_SV
+`include "my_env.sv"
+
+class base_test extends uvm_test;
+    my_env env;
+
+    function new(string name = "base_test", uvm_component parent = null);          //new函数最好给name和parent赋值
+        super.new(name,parent);
+    endfunction
+
+    extern virtual function void build_phase(uvm_phase phase);                     //函数比较长的时候用extern，短的时候不用extern就行
+    extern virtual function void report_phase(uvm_phase phase);
+    `uvm_component_utils(base_test);                                               //factory机制
+endclass
+
+function void base_test::build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    env = my_env::type_id::create("env", this);
+//    uvm_config_db#(uvm_object_wrapper)::set(this,                                  //加入base_test之后，把default_sequence写在base_test里面而不是env里面
+//                                 "env.i_agt.sqr.main_phase",                       //四个参数分别是：发起者、接收者路径与生效时间、配置项名、具体配置值
+//                                 "default_sequence",
+//                                 my_sequence::type_id::get());
+endfunction
+
+function void base_test::report_phase(uvm_phase phase);                            //report_phase在main_phase运行结束之后开始运行
+    uvm_report_server server;
+    int err_num;
+    super.report_phase(phase);
+
+    server = get_report_server();                                                  //获取 UVM 环境中的“全局报告服务器”（Report Server）的实例（句柄）。
+    err_num = server.get_severity_count(UVM_ERROR);
+
+    if(err_num != 0)begin
+        $display("TEST CASE FAILED");
+    end
+    else begin
+        $display("TEST CASE PASSED");
+    end
+endfunction
+
+`endif
