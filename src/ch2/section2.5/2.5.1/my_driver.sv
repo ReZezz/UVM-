@@ -1,0 +1,67 @@
+`include "my_transaction.sv"                                                    //必须写在最前面，因为编译器是先编译MY_DRIVER_SV的话，class my_driver里面用了
+`ifndef MY_DRIVER_SV                                                            //extern task drive_one_pkt(my_transaction tr)，已经用了my_transaction，会报错
+`define MY_DRIVER_SV
+import uvm_pkg::*;
+`include "uvm_macros.svh"
+
+class my_driver extends uvm_driver#(my_transaction);                            //把driver定义成参数化的类，这里处理的数据类型是my_transaction
+
+    virtual my_if vif;                                                          //由于driver是软件世界，无法直接用硬件世界的interface，所以需要使用virtual
+//    virtual my_if vif2;                                                       //可以同时用多个config_db传参
+
+    `uvm_component_utils(my_driver)                                             //加入了factory机制,无需实例以及显式调用main_phase
+    function new(string name = "my_driver", uvm_component parent = null);
+        super.new(name, parent);
+    endfunction
+
+    virtual function void build_phase(uvm_phase phase);                         //拿interface的接口
+        super.build_phase(phase);                                               //uvm_config_db # (virtual my_if)::get(this, "", "vif", vif)意思是
+        if(!uvm_config_db # (virtual my_if)::get(this, "", "vif", vif))         //去config_db里拿名字叫做"vif"的virtual interface，放到自己的vif变量里                                                                                                                                                    
+            `uvm_fatal("my_driver", "virtual interface must be set for vif!!!") //如果没有拿到，那就打印报错信息“virtual interface must be set for vif!!!”，并自动调用finish函数停止仿真                                                                        
+    endfunction                                                                 //driver是数据发送方，但却是用的get指令是因为，config_db传送的不是数据而是硬件地址，driver要发给dut，但不知道dut
+                                                                                //的硬件地址，所以需要接收来自top发送的dut硬件地址
+    extern task main_phase(uvm_phase phase);                                    //extern是关键词，表示这个任务具体代码没在类的内部，而是在外部。
+    extern task drive_one_pkt(my_transaction tr);                               //发送数据的任务，需要传入一个参数：参数类型是my_transaction，具体参数是tr
+endclass                                                                        //virtual关键字，表示这个任务可以被子类重写
+                                                                                //::是明确方法、变量等属于哪个类，这里是说main_phase属于my_driver类，由于前面类里的
+task my_driver::main_phase(uvm_phase phase);                                    //任务用了extern，要把具体代码写在外面，也就是写在这里，如果不写::，这里的任务会被当成全局任务然后报错
+//    my_transaction tr;                                                        //因为用了sequencer机制而且把my_driver定义成了参数化变量，所以后面可以直接使用uvm_driver的成员变量req来替代tr                                                  
+//    phase.raise_objection(this);                                              //加入sequence之后不再需要objection机制了，因为这里以前是发两个包，现在变成了while(1)死循环，如果还加objection
+                                                                                //那么只有raise_objection可以执行到，drop_objection完全执行不到。而且没加sequence时driver既发数据，也决定发数据
+                                                                                //所以它需要决定什么时候发送什么时候结束，但是加入sequence之后driver只发送数据，有就发，没就不发，它已经无法决定
+                                                                                //何时开始、何时结束了
+    vif.data <= 8'b0;
+    vif.valid <= 1'b0;
+    while(!vif.rst_n)                                                           //虽然clk和rst_n不是在interface中直接定义成logic，但是这两个信号也是存在于interface中的，可以通过vif.调用
+        @(posedge vif.clk);                                                     //而且interface中的这两个信号可以当成logic类型，之所以写成input是因为这两个信号是需要从外部传入的
+    while(1) begin
+        seq_item_port.try_next_item(req);
+        if(req == null)
+            @(posedge vif.clk);
+        else begin
+            drive_one_pkt(req);
+            seq_item_port.item_done();
+        end
+    end
+//    phase.drop_objection(this);
+endtask
+
+task my_driver::drive_one_pkt(my_transaction tr);                               //使用uvm_field宏简化函数
+    byte unsigned data_q[];     
+    int data_size;
+
+    data_size = tr.pack_bytes(data_q) / 8;                                      //将tr中所有的字段变成byte流放入data_q中，在这个过程中字段按照uvm_field系列宏书写的顺序排列
+    `uvm_info("my_driver", "begin to driver one pkt", UVM_LOW);
+    repeat(3)@(posedge vif.clk);
+    for(int i = 0; i < data_size; i++)begin
+        @(posedge vif.clk);
+        vif.valid <= 1'b1;
+        vif.data <= data_q[i];
+    end
+
+    @(posedge vif.clk);
+    vif.valid <= 1'b0;
+    `uvm_info("my_driver", "end drive one pkt", UVM_LOW);
+endtask
+
+`endif                                                                          //对ifndef的end
